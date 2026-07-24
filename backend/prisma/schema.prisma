@@ -1,0 +1,295 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  CUSTOMER
+  RESTAURANT_OWNER
+  DELIVERY_PARTNER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+}
+
+enum RestaurantStatus {
+  PENDING
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum CuisineType {
+  INDIAN
+  CHINESE
+  ITALIAN
+  MEXICAN
+  AMERICAN
+  CONTINENTAL
+  OTHER
+}
+
+enum FoodCategory {
+  VEG
+  NON_VEG
+  VEGAN
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  READY
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CARD
+  UPI
+  WALLET
+  COD
+}
+
+enum NotificationType {
+  ORDER
+  PROMOTION
+  SYSTEM
+  CHAT
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model User {
+  id           String       @id @default(uuid())
+  name         String
+  email        String       @unique
+  phone        String?      @unique
+  password     String?
+  avatar       String?
+  role         UserRole     @default(CUSTOMER)
+  status       UserStatus   @default(ACTIVE)
+  provider     AuthProvider @default(LOCAL)
+  refreshToken String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  restaurants   Restaurant[]
+  orders        Order[]
+  reviews       Review[]
+  notifications Notification[]
+  chatsAsUser1  Chat[]         @relation("ChatUser1")
+  chatsAsUser2  Chat[]         @relation("ChatUser2")
+  messages      Message[]
+  payments      Payment[]
+
+  @@map("users")
+}
+
+model Restaurant {
+  id          String           @id @default(uuid())
+  name        String
+  description String?
+  address     String
+  city        String
+  phone       String
+  email       String
+  imageUrl    String?
+  cuisineType CuisineType      @default(OTHER)
+  status      RestaurantStatus @default(PENDING)
+  rating      Float            @default(0)
+  totalOrders Int              @default(0)
+  ownerId     String
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  owner     User        @relation(fields: [ownerId], references: [id])
+  menuItems MenuItem[]
+  orders    Order[]
+  reviews   Review[]
+
+  @@map("restaurants")
+}
+
+model MenuItem {
+  id           String       @id @default(uuid())
+  name         String
+  description  String?
+  price        Float
+  imageUrl     String?
+  category     FoodCategory @default(VEG)
+  isAvailable  Boolean      @default(true)
+  restaurantId String
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  restaurant Restaurant  @relation(fields: [restaurantId], references: [id])
+  orderItems OrderItem[]
+
+  @@map("menu_items")
+}
+
+model Order {
+  id              String        @id @default(uuid())
+  userId          String
+  restaurantId    String
+  status          OrderStatus   @default(PENDING)
+  totalAmount     Float
+  deliveryAddress String
+  paymentStatus   PaymentStatus @default(PENDING)
+  paymentMethod   PaymentMethod @default(COD)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  user       User        @relation(fields: [userId], references: [id])
+  restaurant Restaurant  @relation(fields: [restaurantId], references: [id])
+  items      OrderItem[]
+  payment    Payment?
+  chat       Chat?
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id         String @id @default(uuid())
+  orderId    String
+  menuItemId String
+  quantity   Int
+  price      Float
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  order    Order    @relation(fields: [orderId], references: [id])
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@map("order_items")
+}
+
+model Payment {
+  id                  String        @id @default(uuid())
+  orderId             String        @unique
+  userId              String
+  amount              Float
+  method              PaymentMethod @default(COD)
+  status              PaymentStatus @default(PENDING)
+  razorpayOrderId     String?
+  razorpayPaymentId   String?
+  razorpaySignature   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  order Order @relation(fields: [orderId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@map("payments")
+}
+
+model Review {
+  id           String @id @default(uuid())
+  userId       String
+  restaurantId String
+  rating       Int
+  comment      String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  user       User       @relation(fields: [userId], references: [id])
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id])
+
+  @@map("reviews")
+}
+
+model Notification {
+  id      String           @id @default(uuid())
+  userId  String
+  type    NotificationType @default(SYSTEM)
+  title   String
+  body    String
+  isRead  Boolean          @default(false)
+  data    Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("notifications")
+}
+
+model Chat {
+  id      String @id @default(uuid())
+  orderId String @unique
+  user1Id String
+  user2Id String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  order    Order     @relation(fields: [orderId], references: [id])
+  user1    User      @relation("ChatUser1", fields: [user1Id], references: [id])
+  user2    User      @relation("ChatUser2", fields: [user2Id], references: [id])
+  messages Message[]
+
+  @@map("chats")
+}
+
+model Message {
+  id       String @id @default(uuid())
+  chatId   String
+  senderId String
+  content  String
+  isRead   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  chat   Chat @relation(fields: [chatId], references: [id])
+  sender User @relation(fields: [senderId], references: [id])
+
+  @@map("messages")
+}
