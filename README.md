@@ -1,6 +1,6 @@
-# 🍽️ Ayuze – AI-Powered Food Delivery Platform
+# 🍽️ Azure – AI-Powered Food Delivery Platform
 
-> A production-ready full-stack food delivery platform inspired by modern food delivery applications. Ayuze enables customers to discover restaurants, order food, track deliveries in real time, and receive AI-powered food recommendations through a scalable microservice-oriented architecture.
+> A production-ready full-stack food delivery platform inspired by modern food delivery applications. Azure enables customers to discover restaurants, order food, track deliveries in real time, and receive AI-powered food recommendations through a scalable microservice-oriented architecture.
 
 ---
 
