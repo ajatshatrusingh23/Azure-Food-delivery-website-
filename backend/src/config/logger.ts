@@ -5,35 +5,18 @@ const { combine, timestamp, printf, colorize, errors, json } = winston.format;
 
 const devFormat = combine(
   colorize({ all: true }),
-  timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+  timestamp({ format: 'HH:mm:ss' }),
   errors({ stack: true }),
   printf(({ level, message, timestamp: ts, stack, ...meta }) => {
-    const metaStr = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
-    return stack
-      ? `[${ts as string}] ${level}: ${message as string}\n${stack as string}${metaStr}`
-      : `[${ts as string}] ${level}: ${message as string}${metaStr}`;
+    const extra = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
+    return `[${String(ts)}] ${level}: ${String(message)}${stack ? `\n${String(stack)}` : ''}${extra}`;
   }),
 );
 
-const prodFormat = combine(timestamp(), errors({ stack: true }), json());
-
+/** Logs go to stdout only (12-factor): the platform collects them. JSON in production. */
 export const logger = winston.createLogger({
-  level: env.isDevelopment ? 'debug' : 'info',
-  format: env.isDevelopment ? devFormat : prodFormat,
-  defaultMeta: { service: 'zomato-backend' },
-  transports: [
-    new winston.transports.Console(),
-    new winston.transports.File({
-      filename: 'logs/error.log',
-      level: 'error',
-      maxsize: 5_242_880, // 5MB
-      maxFiles: 5,
-    }),
-    new winston.transports.File({
-      filename: 'logs/combined.log',
-      maxsize: 5_242_880,
-      maxFiles: 5,
-    }),
-  ],
-  exitOnError: false,
+  level: env.logLevel,
+  format: env.isProduction ? combine(timestamp(), errors({ stack: true }), json()) : devFormat,
+  defaultMeta: env.isProduction ? { service: 'azure-backend' } : undefined,
+  transports: [new winston.transports.Console()],
 });

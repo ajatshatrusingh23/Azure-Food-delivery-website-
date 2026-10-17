@@ -1,62 +1,39 @@
-import { Request, Response, NextFunction } from 'express';
-import { verifyAccessToken } from '@utils/generateTokens';
+import type { NextFunction, Request, Response } from 'express';
+import type { UserRole } from '@prisma/client';
 import { ApiError } from '@utils/ApiError';
-import { COOKIE_NAMES, ERROR_MESSAGES } from '@utils/constants';
-import type { AuthenticatedRequest, UserRole } from '@types/common.types';
+import { COOKIES } from '@utils/constants';
+import { verifyAccessToken } from '@utils/tokens';
 
-/**
- * Verifies the JWT access token from either the Authorization header
- * or the httpOnly cookie. Attaches the decoded payload to req.user.
- */
-export const authenticate = (
-  req: Request,
-  _res: Response,
-  next: NextFunction,
-): void => {
+const readToken = (req: Request): string | undefined => {
+  const header = req.headers.authorization;
+  if (header?.startsWith('Bearer ')) return header.slice(7);
+  return req.cookies?.[COOKIES.ACCESS_TOKEN] as string | undefined;
+};
+
+/** Requires a valid access token (httpOnly cookie for browsers, Bearer header for API clients). */
+export const authenticate = (req: Request, _res: Response, next: NextFunction): void => {
+  const token = readToken(req);
+  if (!token) return next(ApiError.unauthorized());
   try {
-    let token: string | undefined;
-
-    const authHeader = req.headers.authorization;
-    if (authHeader?.startsWith('Bearer ')) {
-      token = authHeader.split(' ')[1];
-    } else if (req.cookies?.[COOKIE_NAMES.ACCESS_TOKEN]) {
-      token = req.cookies[COOKIE_NAMES.ACCESS_TOKEN] as string;
-    }
-
-    if (!token) {
-      throw ApiError.unauthorized(ERROR_MESSAGES.UNAUTHORIZED);
-    }
-
-    const payload = verifyAccessToken(token);
-    (req as AuthenticatedRequest).user = payload;
+    const claims = verifyAccessToken(token);
+    req.user = { id: claims.sub, email: claims.email, role: claims.role };
     next();
-  } catch (error) {
-    if (error instanceof ApiError) {
-      next(error);
-      return;
-    }
-    next(ApiError.unauthorized(ERROR_MESSAGES.TOKEN_INVALID));
+  } catch {
+    next(new ApiError(401, 'Access token is invalid or expired', undefined, 'token_expired'));
   }
 };
 
-/**
- * Role-based access control middleware factory.
- * Usage: authorize(UserRole.ADMIN, UserRole.RESTAURANT_OWNER)
- */
-export const authorize = (...roles: UserRole[]) => {
-  return (req: Request, _res: Response, next: NextFunction): void => {
-    const user = (req as AuthenticatedRequest).user;
-
-    if (!user) {
-      next(ApiError.unauthorized());
-      return;
-    }
-
-    if (!roles.includes(user.role)) {
-      next(ApiError.forbidden(ERROR_MESSAGES.FORBIDDEN));
-      return;
-    }
-
+/** Role-based access control: `authorize('ADMIN')`, `authorize('RESTAURANT_OWNER', 'ADMIN')`. */
+export const authorize =
+  (...roles: UserRole[]) =>
+  (req: Request, _res: Response, next: NextFunction): void => {
+    if (!req.user) return next(ApiError.unauthorized());
+    if (!roles.includes(req.user.role)) return next(ApiError.forbidden());
     next();
   };
+
+/** For handlers behind `authenticate`: returns the caller or throws. */
+export const currentUser = (req: Request) => {
+  if (!req.user) throw ApiError.unauthorized();
+  return req.user;
 };

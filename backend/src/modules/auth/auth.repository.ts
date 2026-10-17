@@ -1,52 +1,48 @@
-import { PrismaClient } from '@prisma/client';
-import type { IBaseRepository } from '@interfaces/repository.interface';
-import type { PaginationQuery, PaginatedResult } from '@types/common.types';
-import type { AuthUser } from './auth.types';
-import type { RegisterDto } from './auth.dto';
+import type { Prisma, UserRole } from '@prisma/client';
+import { prisma } from '@config/database';
 
-// ─── Auth Repository ──────────────────────────────────────────────────────────
+export const publicUserSelect = {
+  id: true,
+  name: true,
+  email: true,
+  phone: true,
+  role: true,
+  status: true,
+  createdAt: true,
+} satisfies Prisma.UserSelect;
 
-export class AuthRepository
-  implements IBaseRepository<AuthUser, RegisterDto, Partial<RegisterDto>>
-{
-  constructor(private readonly prisma: PrismaClient) {}
+export type PublicUser = Prisma.UserGetPayload<{ select: typeof publicUserSelect }>;
 
-  async findById(id: string): Promise<AuthUser | null> {
-    void id;
-    return Promise.resolve(null);
-  }
+export const authRepository = {
+  findUserByEmail: (email: string) => prisma.user.findUnique({ where: { email } }),
 
-  async findAll(pagination: PaginationQuery): Promise<PaginatedResult<AuthUser>> {
-    void pagination;
-    return Promise.resolve({
-      data: [],
-      meta: { total: 0, page: 1, limit: 10, totalPages: 0, hasNextPage: false, hasPreviousPage: false },
-    });
-  }
+  findUserById: (id: string) => prisma.user.findUnique({ where: { id }, select: publicUserSelect }),
 
-  async create(data: RegisterDto): Promise<AuthUser> {
-    void data;
-    return Promise.resolve({} as AuthUser);
-  }
+  createUser: (data: { name: string; email: string; phone?: string; passwordHash: string; role: UserRole }) =>
+    prisma.user.create({ data, select: publicUserSelect }),
 
-  async update(id: string, data: Partial<RegisterDto>): Promise<AuthUser> {
-    void id;
-    void data;
-    return Promise.resolve({} as AuthUser);
-  }
+  createSession: (data: {
+    userId: string;
+    tokenHash: string;
+    family: string;
+    expiresAt: Date;
+    userAgent?: string;
+    ip?: string;
+  }) => prisma.session.create({ data }),
 
-  async delete(id: string): Promise<void> {
-    void id;
-    return Promise.resolve();
-  }
+  findSessionByHash: (tokenHash: string) =>
+    prisma.session.findUnique({ where: { tokenHash }, include: { user: { select: { id: true, email: true, role: true, status: true } } } }),
 
-  async exists(id: string): Promise<boolean> {
-    void id;
-    return Promise.resolve(false);
-  }
+  /**
+   * Atomically retires a session. `revokedAt: null` in the WHERE clause makes this a
+   * compare-and-set: if two requests race to rotate the same token, only one gets count = 1.
+   */
+  revokeSessionIfActive: (id: string, replacedBy?: string) =>
+    prisma.session.updateMany({ where: { id, revokedAt: null }, data: { revokedAt: new Date(), replacedBy } }),
 
-  async findByEmail(email: string): Promise<AuthUser | null> {
-    void email;
-    return Promise.resolve(null);
-  }
-}
+  revokeFamily: (family: string) =>
+    prisma.session.updateMany({ where: { family, revokedAt: null }, data: { revokedAt: new Date() } }),
+
+  revokeAllForUser: (userId: string) =>
+    prisma.session.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } }),
+};

@@ -1,58 +1,28 @@
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { env } from './env';
 import { logger } from './logger';
 
-const createPrismaClient = (): PrismaClient => {
-  return new PrismaClient({
-    log: env.isDevelopment
-      ? [
-          { emit: 'event', level: 'query' },
-          { emit: 'event', level: 'error' },
-          { emit: 'event', level: 'warn' },
-        ]
-      : [{ emit: 'event', level: 'error' }],
+/** Prisma 7 talks to Postgres through a driver adapter (node-postgres pool). */
+const createClient = () =>
+  new PrismaClient({
+    adapter: new PrismaPg({ connectionString: env.databaseUrl }),
+    log: env.isDevelopment ? ['warn', 'error'] : ['error'],
   });
-};
 
-const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined;
-};
+// Reuse one client across hot reloads in development (each client owns a connection pool).
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+export const prisma = globalForPrisma.prisma ?? createClient();
+if (!env.isProduction) globalForPrisma.prisma = prisma;
 
-export const prisma: PrismaClient =
-  globalForPrisma.prisma ?? createPrismaClient();
-
-if (!env.isProduction) {
-  globalForPrisma.prisma = prisma;
-}
+export type Db = typeof prisma;
+export type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
 export const connectDatabase = async (): Promise<void> => {
-  try {
-    await prisma.$connect();
-    logger.info('✅ Database connected successfully');
-
-    if (env.isDevelopment) {
-      // @ts-expect-error — Prisma event typing requires explicit event map
-      prisma.$on('query', (e: { query: string; duration: number }) => {
-        logger.debug(`Query: ${e.query} | Duration: ${e.duration}ms`);
-      });
-    }
-
-    // @ts-expect-error — Prisma event typing requires explicit event map
-    prisma.$on('error', (e: { message: string }) => {
-      logger.error(`Database error: ${e.message}`);
-    });
-  } catch (error) {
-    logger.error('❌ Database connection failed:', error);
-    throw error;
-  }
+  await prisma.$queryRaw`SELECT 1`;
+  logger.info('Database connected');
 };
 
 export const disconnectDatabase = async (): Promise<void> => {
-  try {
-    await prisma.$disconnect();
-    logger.info('Database disconnected');
-  } catch (error) {
-    logger.error('Error disconnecting database:', error);
-    throw error;
-  }
+  await prisma.$disconnect();
 };

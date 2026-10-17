@@ -1,38 +1,15 @@
-import { Response } from 'express';
-import type { PaginationMeta, ApiSuccessResponse } from '@types/common.types';
+import type { Response } from 'express';
+import type { PaginationMeta } from '@shared/types';
 
-/**
- * Centralised response formatter.
- * All successful responses must go through this helper to ensure
- * a consistent JSON envelope across the entire API.
- */
-export class ApiResponse {
-  static success<T>(
-    res: Response,
-    statusCode: number,
-    message: string,
-    data: T,
-    meta?: PaginationMeta,
-  ): Response {
-    const body: ApiSuccessResponse<T> = {
-      success: true,
-      statusCode,
-      message,
-      data,
-      ...(meta && { meta }),
-    };
-    return res.status(statusCode).json(body);
-  }
-
-  static created<T>(res: Response, message: string, data: T): Response {
-    return ApiResponse.success(res, 201, message, data);
-  }
-
-  static ok<T>(res: Response, message: string, data: T, meta?: PaginationMeta): Response {
-    return ApiResponse.success(res, 200, message, data, meta);
-  }
-
-  static noContent(res: Response): Response {
+/** Every successful response uses one envelope: { success, message, data, meta? }. */
+export const ApiResponse = {
+  ok<T>(res: Response, data: T, message = 'OK', meta?: PaginationMeta) {
+    return res.status(200).json({ success: true, message, data, ...(meta && { meta }) });
+  },
+  created<T>(res: Response, data: T, message = 'Created') {
+    return res.status(201).json({ success: true, message, data });
+  },
+  noContent(res: Response) {
     return res.status(204).send();
-  }
-}
+  },
+};

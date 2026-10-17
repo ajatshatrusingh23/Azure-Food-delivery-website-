@@ -1,55 +1,39 @@
 import { HTTP_STATUS } from './constants';
 
 /**
- * Custom application error class.
- * Extends the native Error to carry HTTP status codes and
- * structured field-level errors for validation responses.
+ * An expected ("operational") error with an HTTP status. Anything else that reaches the
+ * error middleware is treated as a bug and returned as a generic 500.
  */
 export class ApiError extends Error {
-  public readonly statusCode: number;
-  public readonly errors: Record<string, string[]> | undefined;
-  public readonly isOperational: boolean;
-
   constructor(
-    statusCode: number,
+    public readonly statusCode: number,
     message: string,
-    errors?: Record<string, string[]>,
-    isOperational = true,
+    public readonly errors?: Record<string, string[]>,
+    public readonly code?: string,
   ) {
     super(message);
-    this.statusCode = statusCode;
-    this.errors = errors;
-    this.isOperational = isOperational;
-
-    Object.setPrototypeOf(this, new.target.prototype);
-    Error.captureStackTrace(this, this.constructor);
+    this.name = 'ApiError';
   }
 
-  static badRequest(message: string, errors?: Record<string, string[]>): ApiError {
-    return new ApiError(HTTP_STATUS.BAD_REQUEST, message, errors);
+  static badRequest(message: string, code?: string) {
+    return new ApiError(HTTP_STATUS.BAD_REQUEST, message, undefined, code);
   }
-
-  static unauthorized(message = 'Unauthorized'): ApiError {
+  static unauthorized(message = 'Authentication required') {
     return new ApiError(HTTP_STATUS.UNAUTHORIZED, message);
   }
-
-  static forbidden(message = 'Forbidden'): ApiError {
+  static forbidden(message = 'You do not have permission to do this') {
     return new ApiError(HTTP_STATUS.FORBIDDEN, message);
   }
-
-  static notFound(message = 'Resource not found'): ApiError {
-    return new ApiError(HTTP_STATUS.NOT_FOUND, message);
+  static notFound(what = 'Resource') {
+    return new ApiError(HTTP_STATUS.NOT_FOUND, `${what} not found`);
   }
-
-  static conflict(message: string): ApiError {
-    return new ApiError(HTTP_STATUS.CONFLICT, message);
+  static conflict(message: string, code?: string) {
+    return new ApiError(HTTP_STATUS.CONFLICT, message, undefined, code);
   }
-
-  static unprocessable(message: string, errors?: Record<string, string[]>): ApiError {
+  static unprocessable(message: string, errors?: Record<string, string[]>) {
     return new ApiError(HTTP_STATUS.UNPROCESSABLE_ENTITY, message, errors);
   }
-
-  static internal(message = 'Internal server error'): ApiError {
-    return new ApiError(HTTP_STATUS.INTERNAL_SERVER_ERROR, message, undefined, false);
+  static badGateway(message: string) {
+    return new ApiError(HTTP_STATUS.BAD_GATEWAY, message);
   }
 }

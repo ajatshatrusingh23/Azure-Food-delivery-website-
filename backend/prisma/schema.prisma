@@ -1,10 +1,14 @@
+// Azure data model.
+// Money is always stored as integer paise (₹1 = 100 paise): never floats.
+// Full-text search columns (tsvector) are maintained by Postgres triggers; see the
+// search_triggers migration. Prisma never writes them.
+
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
@@ -18,46 +22,36 @@ enum UserRole {
 
 enum UserStatus {
   ACTIVE
-  INACTIVE
   SUSPENDED
-}
-
-enum AuthProvider {
-  LOCAL
-  GOOGLE
 }
 
 enum RestaurantStatus {
-  PENDING
+  PENDING // waiting for admin approval
   ACTIVE
-  INACTIVE
+  REJECTED
   SUSPENDED
 }
 
-enum CuisineType {
-  INDIAN
-  CHINESE
-  ITALIAN
-  MEXICAN
-  AMERICAN
-  CONTINENTAL
-  OTHER
-}
-
-enum FoodCategory {
+enum FoodType {
   VEG
   NON_VEG
-  VEGAN
+  EGG
 }
 
+/// The 7-stage order lifecycle. Allowed moves live in src/modules/orders/order.state.ts.
 enum OrderStatus {
-  PENDING
-  CONFIRMED
+  PENDING // placed, waiting for online payment
+  CONFIRMED // paid (or cash on delivery), sent to the restaurant
   PREPARING
-  READY
+  READY // waiting for a delivery partner
   OUT_FOR_DELIVERY
   DELIVERED
   CANCELLED
+}
+
+enum PaymentMethod {
+  ONLINE // Razorpay
+  COD
 }
 
 enum PaymentStatus {
@@ -67,229 +61,249 @@ enum PaymentStatus {
   REFUNDED
 }
 
-enum PaymentMethod {
-  CARD
-  UPI
-  WALLET
-  COD
-}
-
-enum NotificationType {
-  ORDER
-  PROMOTION
-  SYSTEM
-  CHAT
-}
-
-// ─── Models ───────────────────────────────────────────────────────────────────
+// ─── Users & sessions ─────────────────────────────────────────────────────────
 
 model User {
-  id           String       @id @default(uuid())
+  id           String     @id @default(uuid())
   name         String
-  email        String       @unique
-  phone        String?      @unique
-  password     String?
-  avatar       String?
-  role         UserRole     @default(CUSTOMER)
-  status       UserStatus   @default(ACTIVE)
-  provider     AuthProvider @default(LOCAL)
-  refreshToken String?
+  email        String     @unique
+  phone        String?    @unique
+  passwordHash String
+  role         UserRole   @default(CUSTOMER)
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
-
-  // Relations
+  sessions      Session[]
   restaurants   Restaurant[]
-  orders        Order[]
+  orders        Order[]        @relation("CustomerOrders")
+  deliveries    Order[]        @relation("RiderDeliveries")
   reviews       Review[]
   notifications Notification[]
-  chatsAsUser1  Chat[]         @relation("ChatUser1")
-  chatsAsUser2  Chat[]         @relation("ChatUser2")
-  messages      Message[]
-  payments      Payment[]
 
+  @@index([role])
   @@map("users")
 }
 
+/// One row per logged-in device. Refresh tokens are opaque, stored only as SHA-256
+/// hashes, and rotated on every use. All tokens from one login share a `family`, so
+/// reuse of an old (already rotated) token revokes the whole family.
+model Session {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  family     String
+  userAgent  String?
+  ip         String?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  replacedBy String?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([family])
+  @@map("sessions")
+}
+
+// ─── Restaurants & menus ──────────────────────────────────────────────────────
+
 model Restaurant {
-  id          String           @id @default(uuid())
-  name        String
-  description String?
-  address     String
-  city        String
-  phone       String
-  email       String
-  imageUrl    String?
-  cuisineType CuisineType      @default(OTHER)
-  status      RestaurantStatus @default(PENDING)
-  rating      Float            @default(0)
-  totalOrders Int              @default(0)
-  ownerId     String
+  id              String                   @id @default(uuid())
+  ownerId         String
+  name            String
+  slug            String                   @unique
+  description     String?
+  cuisines        String[]
+  area            String
+  city            String
+  address         String
+  phone           String
+  latitude        Float
+  longitude       Float
+  priceForTwo     Int // paise
+  avgDeliveryMins Int                      @default(30)
+  isOpen          Boolean                  @default(true)
+  isPureVeg       Boolean                  @default(false)
+  status          RestaurantStatus         @default(PENDING)
+  ratingAvg       Float                    @default(0)
+  ratingCount     Int                      @default(0)
+  imageHue        Int                      @default(20)
+  searchVector    Unsupported("tsvector")?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
-
-  // Relations
-  owner     User        @relation(fields: [ownerId], references: [id])
+  owner     User       @relation(fields: [ownerId], references: [id])
   menuItems MenuItem[]
   orders    Order[]
   reviews   Review[]
 
+  @@index([ownerId])
+  @@index([status, city])
+  @@index([searchVector], type: Gin)
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "restaurants_name_trgm_idx")
   @@map("restaurants")
 }
 
 model MenuItem {
-  id           String       @id @default(uuid())
+  id           String                   @id @default(uuid())
+  restaurantId String
   name         String
   description  String?
-  price        Float
-  imageUrl     String?
-  category     FoodCategory @default(VEG)
-  isAvailable  Boolean      @default(true)
-  restaurantId String
+  category     String // e.g. "Starters", "Main Course", "Desserts"
+  price        Int // paise
+  foodType     FoodType                 @default(VEG)
+  isAvailable  Boolean                  @default(true)
+  isBestseller Boolean                  @default(false)
+  isArchived   Boolean                  @default(false) // soft delete: past orders still reference it
+  searchVector Unsupported("tsvector")?
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
-
-  // Relations
   restaurant Restaurant  @relation(fields: [restaurantId], references: [id])
   orderItems OrderItem[]
 
+  @@index([restaurantId, isArchived])
+  @@index([searchVector], type: Gin)
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "menu_items_name_trgm_idx")
   @@map("menu_items")
 }
 
+// ─── Orders ───────────────────────────────────────────────────────────────────
+
 model Order {
-  id              String        @id @default(uuid())
-  userId          String
-  restaurantId    String
-  status          OrderStatus   @default(PENDING)
-  totalAmount     Float
-  deliveryAddress String
-  paymentStatus   PaymentStatus @default(PENDING)
-  paymentMethod   PaymentMethod @default(COD)
+  id                String        @id @default(uuid())
+  orderNumber       Int           @unique @default(autoincrement())
+  customerId        String
+  restaurantId      String
+  deliveryPartnerId String?
+  status            OrderStatus   @default(PENDING)
+  paymentMethod     PaymentMethod
+  paymentStatus     PaymentStatus @default(PENDING)
+  itemsTotal        Int // paise; all amounts are computed by the server from DB prices
+  deliveryFee       Int
+  taxes             Int
+  total             Int
+  deliveryAddress   String
+  deliveryLatitude  Float
+  deliveryLongitude Float
+  notes             String?
+  cancelReason      String?
+  idempotencyKey    String? // client-generated; a retried "place order" returns the same order
+  placedAt          DateTime      @default(now())
+  deliveredAt       DateTime?
+  updatedAt         DateTime      @updatedAt
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  customer        User         @relation("CustomerOrders", fields: [customerId], references: [id])
+  restaurant      Restaurant   @relation(fields: [restaurantId], references: [id])
+  deliveryPartner User?        @relation("RiderDeliveries", fields: [deliveryPartnerId], references: [id])
+  items           OrderItem[]
+  events          OrderEvent[]
+  payment         Payment?
+  review          Review?
 
-  // Relations
-  user       User        @relation(fields: [userId], references: [id])
-  restaurant Restaurant  @relation(fields: [restaurantId], references: [id])
-  items      OrderItem[]
-  payment    Payment?
-  chat       Chat?
-
+  @@unique([customerId, idempotencyKey])
+  @@index([customerId, placedAt])
+  @@index([restaurantId, status])
+  @@index([deliveryPartnerId, status])
+  @@index([status, placedAt])
   @@map("orders")
 }
 
+/// Line items keep a snapshot of name and price: later menu edits never change past orders.
 model OrderItem {
   id         String @id @default(uuid())
   orderId    String
   menuItemId String
+  name       String
+  price      Int // paise, at the time of ordering
   quantity   Int
-  price      Float
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  order    Order    @relation(fields: [orderId], references: [id])
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   menuItem MenuItem @relation(fields: [menuItemId], references: [id])
 
+  @@index([orderId])
   @@map("order_items")
 }
 
+/// Append-only status history: powers the tracking timeline and records who moved what.
+model OrderEvent {
+  id        String      @id @default(uuid())
+  orderId   String
+  status    OrderStatus
+  actorId   String?
+  note      String?
+  createdAt DateTime    @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@map("order_events")
+}
+
+// ─── Payments ─────────────────────────────────────────────────────────────────
+
 model Payment {
-  id                  String        @id @default(uuid())
-  orderId             String        @unique
-  userId              String
-  amount              Float
-  method              PaymentMethod @default(COD)
-  status              PaymentStatus @default(PENDING)
-  razorpayOrderId     String?
-  razorpayPaymentId   String?
-  razorpaySignature   String?
+  id                String        @id @default(uuid())
+  orderId           String        @unique
+  provider          String // "razorpay" or "test"
+  providerOrderId   String        @unique
+  providerPaymentId String?       @unique
+  amount            Int // paise
+  currency          String        @default("INR")
+  status            PaymentStatus @default(PENDING)
+  failureReason     String?
+  paidAt            DateTime?
+  refundedAt        DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
   order Order @relation(fields: [orderId], references: [id])
-  user  User  @relation(fields: [userId], references: [id])
 
   @@map("payments")
 }
 
+/// Webhook de-duplication: providers deliver at least once, so each event id is processed once.
+model WebhookEvent {
+  id         String   @id // the provider's event id
+  provider   String
+  type       String
+  receivedAt DateTime @default(now())
+
+  @@map("webhook_events")
+}
+
+// ─── Reviews & notifications ──────────────────────────────────────────────────
+
 model Review {
-  id           String @id @default(uuid())
-  userId       String
+  id           String   @id @default(uuid())
+  orderId      String   @unique // one review per delivered order
+  customerId   String
   restaurantId String
   rating       Int
   comment      String?
+  createdAt    DateTime @default(now())
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
-
-  // Relations
-  user       User       @relation(fields: [userId], references: [id])
+  order      Order      @relation(fields: [orderId], references: [id])
+  customer   User       @relation(fields: [customerId], references: [id])
   restaurant Restaurant @relation(fields: [restaurantId], references: [id])
 
+  @@index([restaurantId, createdAt])
   @@map("reviews")
 }
 
 model Notification {
-  id      String           @id @default(uuid())
-  userId  String
-  type    NotificationType @default(SYSTEM)
-  title   String
-  body    String
-  isRead  Boolean          @default(false)
-  data    Json?
-
+  id        String   @id @default(uuid())
+  userId    String
+  title     String
+  body      String
+  orderId   String?
+  isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 
-  // Relations
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId, isRead, createdAt])
   @@map("notifications")
-}
-
-model Chat {
-  id      String @id @default(uuid())
-  orderId String @unique
-  user1Id String
-  user2Id String
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  order    Order     @relation(fields: [orderId], references: [id])
-  user1    User      @relation("ChatUser1", fields: [user1Id], references: [id])
-  user2    User      @relation("ChatUser2", fields: [user2Id], references: [id])
-  messages Message[]
-
-  @@map("chats")
-}
-
-model Message {
-  id       String @id @default(uuid())
-  chatId   String
-  senderId String
-  content  String
-  isRead   Boolean @default(false)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  chat   Chat @relation(fields: [chatId], references: [id])
-  sender User @relation(fields: [senderId], references: [id])
-
-  @@map("messages")
 }

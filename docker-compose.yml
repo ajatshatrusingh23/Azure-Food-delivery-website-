@@ -1,0 +1,49 @@
+# Local infrastructure for Azure.
+#   docker compose up -d db           -> PostgreSQL only (for `npm run dev`)
+#   docker compose --profile app up   -> everything in containers
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: azure
+      POSTGRES_PASSWORD: azure
+      POSTGRES_DB: azure
+    ports:
+      - "55433:5432" # 5432 is often taken by a local Postgres install
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U azure"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    profiles: [app]
+    build: ./backend
+    environment:
+      NODE_ENV: production
+      PORT: "5001"
+      DATABASE_URL: postgresql://azure:azure@db:5432/azure
+      JWT_SECRET: change-me-access-secret-at-least-32-chars
+      CLIENT_URL: http://localhost:3000
+      COOKIE_SECURE: "false" # plain http on localhost
+    ports:
+      - "5001:5001"
+    depends_on:
+      db: { condition: service_healthy }
+
+  frontend:
+    profiles: [app]
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: http://backend:5001
+        NEXT_PUBLIC_SOCKET_URL: http://localhost:5001
+    ports:
+      - "3000:3000"
+    depends_on: [backend]
+
+volumes:
+  pgdata:

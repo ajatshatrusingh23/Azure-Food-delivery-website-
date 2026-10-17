@@ -1,27 +1,41 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
-import { authenticate, authorize } from '@middlewares/auth.middleware';
-import { UserRole } from '@types/common.types';
-import { AdminRepository } from './admin.repository';
-import { AdminService } from './admin.service';
-import { AdminController } from './admin.controller';
+import { z } from 'zod';
+import { authenticate, authorize, currentUser } from '@middlewares/auth.middleware';
+import { ApiResponse } from '@utils/ApiResponse';
+import { paginationSchema } from '@utils/pagination';
+import { adminService } from './admin.service';
 
-// ─── Admin Router ─────────────────────────────────────────────────────────────
+export const adminRouter = Router();
+adminRouter.use(authenticate, authorize('ADMIN'));
 
-const prisma = new PrismaClient();
-const adminRepository = new AdminRepository(prisma);
-const adminService = new AdminService(adminRepository);
-const adminController = new AdminController(adminService);
+const idParam = z.object({ id: z.uuid() });
 
-const router = Router();
+adminRouter.get('/stats', async (_req, res) => {
+  ApiResponse.ok(res, await adminService.stats());
+});
 
-// All admin routes require authentication + ADMIN role
-router.use(authenticate, authorize(UserRole.ADMIN));
+adminRouter.get('/restaurants', async (req, res) => {
+  const { status, ...page } = paginationSchema.extend({ status: z.enum(['PENDING', 'ACTIVE', 'REJECTED', 'SUSPENDED']).optional() }).parse(req.query);
+  const result = await adminService.listRestaurants(status, page);
+  ApiResponse.ok(res, result.data, 'Restaurants', result.meta);
+});
 
-router.get('/', adminController.getAll);
-router.get('/:id', adminController.getById);
-router.post('/', adminController.create);
-router.patch('/:id', adminController.update);
-router.delete('/:id', adminController.remove);
+adminRouter.patch('/restaurants/:id/status', async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const { status } = z.object({ status: z.enum(['ACTIVE', 'REJECTED', 'SUSPENDED']) }).parse(req.body);
+  ApiResponse.ok(res, await adminService.setRestaurantStatus(id, status));
+});
 
-export { router as adminRouter };
+adminRouter.get('/users', async (req, res) => {
+  const { role, q, ...page } = paginationSchema
+    .extend({ role: z.enum(['CUSTOMER', 'RESTAURANT_OWNER', 'DELIVERY_PARTNER', 'ADMIN']).optional(), q: z.string().trim().max(80).optional() })
+    .parse(req.query);
+  const result = await adminService.listUsers({ role, q }, page);
+  ApiResponse.ok(res, result.data, 'Users', result.meta);
+});
+
+adminRouter.patch('/users/:id/status', async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const { status } = z.object({ status: z.enum(['ACTIVE', 'SUSPENDED']) }).parse(req.body);
+  ApiResponse.ok(res, await adminService.setUserStatus(currentUser(req), id, status));
+});

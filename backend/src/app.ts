@@ -1,62 +1,37 @@
-import express, { Application } from 'express';
-import helmet from 'helmet';
-import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import cors from 'cors';
+import express, { type Application } from 'express';
+import helmet from 'helmet';
 import morgan from 'morgan';
-
 import { env } from '@config/env';
 import { logger } from '@config/logger';
+import { errorMiddleware, notFoundMiddleware } from '@middlewares/error.middleware';
+import { paymentWebhookHandler } from '@modules/payments/payment.routes';
 import { API_PREFIX } from '@utils/constants';
-import { errorMiddleware } from '@middlewares/error.middleware';
-import { notFoundMiddleware } from '@middlewares/notFound.middleware';
-import apiRouter from '@routes/index';
+import { apiRouter } from './routes';
 
-// ─── Application Factory ──────────────────────────────────────────────────────
-
-const createApp = (): Application => {
+export const createApp = (): Application => {
   const app = express();
 
-  // ── Security ────────────────────────────────────────────────────────────────
+  // Behind one reverse proxy (Next.js rewrites, Nginx, Render) req.ip is the real client IP,
+  // which the login rate limiter depends on.
+  app.set('trust proxy', 1);
+  app.disable('x-powered-by');
+
   app.use(helmet());
+  app.use(cors({ origin: env.clientUrl, credentials: true }));
 
-  // ── CORS ────────────────────────────────────────────────────────────────────
-  app.use(
-    cors({
-      origin: env.clientUrl,
-      credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
-    }),
-  );
+  // Must come before express.json(): the signature is computed over the raw bytes.
+  app.post(`${API_PREFIX}/payments/webhook`, ...paymentWebhookHandler);
 
-  // ── Body Parsing ────────────────────────────────────────────────────────────
-  app.use(express.json({ limit: '10mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-  // ── Cookie Parser ───────────────────────────────────────────────────────────
+  app.use(express.json({ limit: '100kb' }));
   app.use(cookieParser());
+  if (!env.isTest) {
+    app.use(morgan(env.isProduction ? 'combined' : 'dev', { stream: { write: (line) => logger.http(line.trim()) } }));
+  }
 
-  // ── HTTP Request Logger ─────────────────────────────────────────────────────
-  app.use(
-    morgan(env.isDevelopment ? 'dev' : 'combined', {
-      stream: {
-        write: (message: string) => {
-          logger.http(message.trim());
-        },
-      },
-    }),
-  );
-
-  // ── API Routes ──────────────────────────────────────────────────────────────
   app.use(API_PREFIX, apiRouter);
-
-  // ── 404 Handler ─────────────────────────────────────────────────────────────
   app.use(notFoundMiddleware);
-
-  // ── Global Error Handler ────────────────────────────────────────────────────
   app.use(errorMiddleware);
-
   return app;
 };
-
-export default createApp;
